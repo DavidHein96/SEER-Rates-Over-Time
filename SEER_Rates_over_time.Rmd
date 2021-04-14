@@ -1,0 +1,835 @@
+---
+title: "SEER COX"
+author: "Dave Hein"
+date: "12/8/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(survival)
+library(tidyverse)
+library(survminer)
+```
+
+
+# Loading data
+```{r}
+#crc <- read.delim("~/Documents/SEER_Project/NEW SEER DATA/crc.txt")
+#lung <- read.delim("~/Documents/SEER_Project/NEW SEER DATA/Lung.txt")
+#pan <- read.delim("~/Documents/SEER_Project/NEW SEER DATA/pan.txt")
+
+
+crc <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/SEER/New Seer Data/crc.txt")
+lung <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/SEER/New Seer Data/Lung.txt")
+pan <- read.delim("C:/Users/s197002/OneDrive - University of Texas Southwestern/SEER/New Seer Data/pan.txt")
+```
+
+
+
+# Colon
+```{r}
+n=100
+ntilscolon <- crc%>% filter(Year.of.diagnosis>1989) %>% mutate(event=ifelse(SEER.cause.specific.death.classification=="Dead (attributable to this cancer dx)",1,0)) %>% group_by(Year.of.diagnosis) %>% 
+  mutate(quartile = ntile(Survival.months,n), propcensored = ((n()-sum(event))/n())) %>%  mutate(year=Year.of.diagnosis-1990)%>%mutate(index=(1000*year+Survival.months))
+
+colonties <- ntilscolon%>%group_by(year,Survival.months)%>%summarize(ties=n()) %>%mutate(index=(1000*year + Survival.months))%>%group_by(year)%>%mutate(total=sum(ties),tiessum=cumsum(ties)-ties,newntile=1-(total-tiessum)/total)
+
+colon_joined<-left_join(ntilscolon,colonties,by='index')
+
+table(ntilscolon$Year.of.diagnosis,ntilscolon$Survival.months)
+
+table(ntilscolon$Year.of.diagnosis)
+
+medscolochemo <- ntilscolon  %>% dplyr::group_by(year,quartile) %>% dplyr::summarize(meds = median(Survival.months),cevents=mean(propcensored))%>%mutate(quart=as.factor(quartile))
+
+fitcolochemo <- lm(meds ~ quart + year + quart:year+cevents,medscolochemo)
+
+summary(fitcolochemo)
+
+
+
+surv_colon <- Surv(time = colon_joined$Survival.months.x, event = colon_joined$event)
+
+coxph_colon <- coxph(surv_colon ~ year.x*newntile + Age.at.diagnosis, 
+                   data = colon_joined)
+
+summary(coxph_colon)
+```
+
+# Lung
+```{r}
+ntilslung <- lung%>% filter(Year.of.diagnosis>1989) %>% group_by(Year.of.diagnosis) %>% 
+  mutate(Survival.months, quartile = ntile(Survival.months,n)) %>% mutate(event=ifelse(SEER.cause.specific.death.classification=="Dead (attributable to this cancer dx)",1,0)) %>% mutate(year=Year.of.diagnosis-1990)%>%mutate(index=(1000*year+Survival.months))
+
+
+lungties <- ntilslung%>%group_by(year,Survival.months)%>%summarize(ties=n()) %>%mutate(index=(1000*year + Survival.months))%>%group_by(year)%>%mutate(total=sum(ties),tiessum=cumsum(ties)-ties,newntile=1-(total-tiessum)/total)
+
+lung_joined<-left_join(ntilslung,lungties,by='index')
+
+
+
+surv_lung <- Surv(time = ntilslung$Survival.months, event = ntilslung$event)
+
+coxph_lung <- coxph(surv_lung ~ year*quartile + Age.at.diagnosis, 
+                   data = ntilslung)
+
+summary(coxph_lung)
+
+
+```
+# Pan
+```{r}
+ntilspan <- pan%>% filter(Year.of.diagnosis>1989) %>% group_by(Year.of.diagnosis) %>% 
+  mutate(Survival.months, quartile = ntile(Survival.months,n)) %>% mutate(event=ifelse(SEER.cause.specific.death.classification=="Dead (attributable to this cancer dx)",1,0)) %>% mutate(year=Year.of.diagnosis-1990)%>%mutate(index=(1000*year+Survival.months))
+
+
+panties <- ntilspan%>%group_by(year,Survival.months)%>%summarize(ties=n()) %>%mutate(index=(1000*year + Survival.months))%>%group_by(year)%>%mutate(total=sum(ties),tiessum=cumsum(ties)-ties,newntile=1-(total-tiessum)/total)
+
+pan_joined<-left_join(ntilspan,panties,by='index')
+
+
+
+surv_pan <- Surv(time = ntilspan$Survival.months, event = ntilspan$event)
+
+coxph_pan <- coxph(surv_pan ~ year*quartile + Age.at.diagnosis, 
+                   data = ntilspan)
+
+summary(coxph_pan)
+
+
+```
+
+
+
+# All
+```{r}
+colon_joined <- colon_joined%>%mutate(cancer_type="crc")
+
+lung_joined <- lung_joined%>%mutate(cancer_type="lung")
+
+pan_joined <- pan_joined%>%mutate(cancer_type="pan")
+
+
+all <- rbind(pan_joined,lung_joined,colon_joined)
+#all$Quartile1 = 0
+#all$Quartile1[which(all$quartile %in% 75:100)] = 1
+
+surv_all <- Surv(time = all$Survival.months.x, event = all$event)
+
+coxph_all <- coxme::coxme(surv_all ~ year.x*newntile  + (1|cancer_type), 
+                   data = all)
+
+summary(coxph_all)
+
+Age.at.diagnosis
+
+
+
+
+#graph showing proportional hazards over time for year of diagnosis
+testforgraph<-all%>%filter(year.x%in%c(1,5,10,15,20),newntile<0.20)
+
+surv_graph <- Surv(time = testforgraph$Survival.months.x, event = testforgraph$event)
+fit_all<- survfit(surv_graph~year.x,data=testforgraph)
+
+#Graph
+ggsurvplot(fit_all,data=testforgraph,xlim=c(0,100))+ ggtitle("prop hazards for year of diagnosis")
+
+
+
+
+'all_1990 = all[all$Year.of.diagnosis==1995,]
+surv_forplot1 <- Surv(time = all_1990$Survival.months, event=all_1990$event)
+forplot1 = survfit(surv_forplot1~as.factor(Quartile1),data=all_1990)
+autoplot(forplot1)
+
+all_2015 = all[all$Year.of.diagnosis==2015,]
+surv_forplot2 <- Surv(time = all_2015$Survival.months, event=all_2015$event)
+forplot2 = survfit(surv_forplot2~as.factor(Quartile1),data=all_2015)
+autoplot(forplot2)
+
+```
+
+
+
+
+# Dave's code for all + kp graphs
+```{r}
+ntilscolon <- ntilscolon%>%mutate(cancer_type="crc")
+ntilslung <- ntilslung%>%mutate(cancer_type="lung")
+ntilspan <- ntilspan%>%mutate(cancer_type="pan")
+
+
+all <- rbind(ntilslung,ntilspan,ntilscolon)
+
+surv_all <- Surv(time = all$Survival.months, event = all$event)
+
+#data sets
+dave_all_1990= all[all$Year.of.diagnosis==1990,]
+dave_all_2000= all[all$Year.of.diagnosis==2000,]
+dave_all_2010= all[all$Year.of.diagnosis==2010,]
+
+#surv objects
+surv_1990 <- Surv(time = dave_all_1990$Survival.months, event = dave_all_1990$event)
+surv_2000 <- Surv(time = dave_all_2000$Survival.months, event = dave_all_2000$event)
+surv_2010 <- Surv(time = dave_all_2010$Survival.months, event = dave_all_2010$event)
+
+#fit km curves
+fit_1990<- survfit(surv_1990~Quartile1,data=dave_all_1990)
+fit_2000<- survfit(surv_2000~Quartile1,data=dave_all_2000)
+fit_2010<- survfit(surv_2010~Quartile1,data=dave_all_2010)
+
+#Graph
+ggsurvplot(fit_1990,data=dave_all_1990)+ ggtitle("1990")
+ggsurvplot(fit_2000,data=dave_all_2000)+ ggtitle("2000")
+ggsurvplot(fit_2010,data=dave_all_2010)+ ggtitle("2010")
+
+
+#for loop that computes all possible values
+
+interaction_values <- vector()
+for(i in 1:98){
+  p=i+1
+  all$Quartile1 = 0
+  all$Quartile1[which(all$quartile %in% p:100)] = 1
+  surv_i <- Surv(time = all$Survival.months, event = all$event)
+  coxph_i <- coxme::coxme(surv_i ~ year*as.factor(Quartile1) + Age.at.diagnosis + (1|cancer_type), data = all)
+  interaction_values[i] <-coxph_i[[1]][4]
+}
+
+intvalues_backup<- interaction_values
+
+intvalues<- as.data.frame(interaction_values)
+
+intvalues<- intvalues %>% mutate(ntile_cutoff = seq(1:nrow(intvalues))+1) %>% mutate(expbeta= exp(interaction_values))
+
+ggplot(intvalues)+geom_point(aes(x=ntile_cutoff,y=expbeta))
+
+
+
+```
+
+
+
+### Code for all sites ###
+```{r}
+
+
+all_cases <- read.delim("C:/Users/Dave Work/OneDrive - University of Texas Southwestern/SEER_Project/case_list_2(1).txt")
+
+
+all_cases3<- prop_metastatic%>%filter(site!="Prostate",site!="Breast")
+
+
+
+table(all_cases$SEER.cause.specific.death.classification)
+
+### Making graph for proportion metastatic ### ################################
+prop_metastatic<- all_cases%>%mutate(Site.recode.ICD.O.3.WHO.2008==as.factor(Site.recode.ICD.O.3.WHO.2008))%>%
+                              mutate(site=ifelse(Site.recode.ICD.O.3.WHO.2008 %in% c("Appendix",
+                                                       "Ascending Colon",
+                                                       "Cecum",
+                                                       "Descending Colon",
+                                                       "Hepatic Flexure",
+                                                       "Large Intestine, NOS",
+                                                       "Rectosigmoid Junction",
+                                                       "Rectum",
+                                                       "Sigmoid Colon",
+                                                       "Splenic Flexure",
+                                                       "Transverse Colon"), "Colorectal", Site.recode.ICD.O.3.WHO.2008) )%>%
+                             # mutate(SEER.historic.stage.A..1973.2015.=ifelse(Site.recode.ICD.O.3.WHO.2008=="Prostate"&
+                                                                              #AJCC.stage.3rd.edition..1988.2003.==40,
+                                                                             # "Distant",SEER.historic.stage.A..1973.2015.))%>%
+                             # mutate(SEER.historic.stage.A..1973.2015.=ifelse(Site.recode.ICD.O.3.WHO.2008=="Prostate"&
+                                                                             # AJCC.stage.3rd.edition..1988.2003.%in%c(30,20,10),
+                                                                              #"Localized",SEER.historic.stage.A..1973.2015.))%>%
+                              filter(SEER.historic.stage.A..1973.2015.%in% c("Regional",
+                                                                             "Distant",
+                                                                             "Localized",
+                                                                             "Localized/regional (Prostate cases)"))%>%
+                             mutate(stage=ifelse(SEER.historic.stage.A..1973.2015.%in%c("Localized/regional (Prostate cases)","Localized","Regional"),"Localized_Regional","Distant"))%>%
+                              mutate(Survival.months=as.integer(Survival.months))%>%
+                              filter(site!="Prostate",site!="Breast")
+
+prop_metastatic_summ <- prop_metastatic%>%group_by(site,stage,Year.of.diagnosis)%>%summarize(n_stages=n())
+prop_metastatic_summ <- prop_metastatic_summ%>%pivot_wider(names_from = "stage",values_from="n_stages")
+prop_metastatic_summ <-prop_metastatic_summ%>%mutate(prop_meta= Distant/(Distant+Localized_Regional))%>%filter(site!="Breast")
+
+ggplot(prop_metastatic_summ)+geom_point(aes(x=Year.of.diagnosis,y=prop_meta,color=site,group=site),size=1.8)+ ylim(0,.9)+ggtitle("Proportion Diagnosed Metastatic (1990-2015)")+
+                  ylab("Proportion Diagnosed Metastatic")+
+                  xlab("Year of Diagnosis")+
+                  theme_test()+ 
+                  theme(axis.text.x=element_text(size=rel(1.2)),axis.text.y=element_text(size=rel(1.2)))+
+                  labs(color="Cancer Type")+
+                  
+
+ggsave(width = 7,height=4,filename ="prop_diag_meta.png" ,plot=last_plot())
+
+
+extra_table <- as.data.frame(table(prop_metastatic$Year.of.diagnosis,prop_metastatic$stage,prop_metastatic$site))
+```
+
+
+```{r}
+ggsave(width = 7,height=4,filename ="prop_meta_who_get_chemo.png" ,plot=last_plot())
+
+### Making graph for proportion of metastatic who recieve chemo ### #######################################
+only_mets<-prop_metastatic%>%filter(stage=="Distant")%>%
+                             group_by(site, Year.of.diagnosis,Chemotherapy.recode..yes..no.unk.)%>%
+                              summarize(count=n())
+only_mets<- only_mets%>%pivot_wider(names_from = "Chemotherapy.recode..yes..no.unk.",values_from="count")
+only_mets<- only_mets%>%rename(no_uknown='No/Unknown')
+only_mets<- only_mets%>%mutate(prop_chemo= Yes/(Yes+no_uknown))%>%filter(site!="Breast")
+
+ggplot(only_mets)+geom_point(aes(x=Year.of.diagnosis,y=prop_chemo,color=site,group=site),size=1.8)+
+                  ylim(0,.9)+
+                  ggtitle("Proportion of Those Disagnosed Metastatic who Receive Chemotherapy")+
+                  ylab("Proportion Recieving Chemotherapy")+
+                  xlab("Year of Diagnosis")+
+                  theme_test()+ 
+                  theme(axis.text.x=element_text(size=rel(1.2)),axis.text.y=element_text(size=rel(1.2)))+
+                  labs(color="Cancer Type")
+
+ggsave(width = 7,height=4,filename ="prop_meta_who_get_chemo.png" ,plot=last_plot())
+
+### COX Regression ###
+cox_data <- prop_metastatic%>%filter(stage=="Distant",Chemotherapy.recode..yes..no.unk.=="Yes",site!="Prostate")%>%
+                              mutate(event=ifelse(SEER.cause.specific.death.classification=="Dead (attributable to this cancer dx)",1,0)) %>%
+                              mutate(year=Year.of.diagnosis-1990)%>%
+                              mutate(index=(1000*year+Survival.months))%>%
+                              mutate(index2=paste(as.character(index),site,sep=""))
+
+nochemo<-prop_metastatic%>%filter(stage=="Distant",Chemotherapy.recode..yes..no.unk.=="No/Unknown",site!="Prostate",site!="Breast")%>%
+                              mutate(event=ifelse(SEER.cause.specific.death.classification=="Dead (attributable to this cancer dx)",1,0)) %>%
+                              mutate(year=Year.of.diagnosis-1990)%>%
+                              mutate(index=(1000*year+Survival.months))%>%
+                              mutate(index2=paste(as.character(index),site,sep=""))
+
+#### USE THIS ONE #### with newntile2
+all_joined2<-cox_data%>%filter(site!="Breast")%>%group_by(site,year)%>%mutate(newntile2=ntile(Survival.months,4))%>%
+                        mutate(quantile2=ifelse(newntile2==1,"Lowest 25%",ifelse(newntile2==4,"Top 25%","Middle 50%")))
+
+
+allties <- cox_data%>%group_by(site,year,Survival.months)%>%
+                      summarize(ties=n()) %>%
+                      mutate(index=(1000*year+Survival.months))%>%
+                      group_by(site,year)%>%
+                      mutate(total=sum(ties),tiessum=cumsum(ties)-ties,newntile=1-(total-tiessum)/total)%>%
+                      mutate(index2=paste(as.character(index),site,sep=""))%>%
+                      select(site,year,newntile,index2)
+                      
+  
+  
+all_joined<-left_join(cox_data,allties,by='index2')
+
+all_joined<-all_joined%>%group_by(site.y,year.y,Survival.months)%>%mutate(newntile2=ntile(survival.months,4))
+
+
+surv_all <- Surv(time = all_joined$Survival.months, event = all_joined$event)
+
+coxph_all <- coxme::coxme(surv_all ~ year.x*newntile  + Age.at.diagnosis + Age.at.diagnosis*newntile + Age.at.diagnosis*newntile*year.x+ (1|site.x), data = all_joined)
+
+summary(coxph_all)
+
+
+
+
+
+coxph_all2 <- coxme::coxme(surv_all ~ year.x*newntile +(1|site.x), data = all_joined)
+
+summary(coxph_all2)
+
+
+
+#Junk
+prop_metastatic<-prop_metastatic%>%mutate(Survival.months=as.integer(Survival.months))
+names(prop_metastatic)
+
+
+table(all_joined$Grade)
+all_prost<-all_cases%>%filter(Site.recode.ICD.O.3.WHO.2008=="Prostate")
+table(all_prost$Year.of.diagnosis,all_prost$Site.recode.ICD.O.3.WHO.2008,all_prost$AJCC.stage.3rd.edition..1988.2003.)
+```
+
+
+### Getting median survival times ### ######################### FINALLYYYY #######################################
+```{r}
+library(stringr)
+
+#overall medians
+medians_fit <- survfit(Surv(time = all_joined2$Survival.months, event = all_joined2$event)~site+year,data=all_joined2)
+medians <- as.data.frame(surv_median(medians_fit))
+medians <- medians %>% mutate(site=str_extract(strata,"(?<==).+(?=,)"), year=as.numeric(str_extract(strata,"(?<=year=).+")))
+
+ggplot(medians)+geom_point(aes(x=year,y=median,color=site,group=site))+ylim(0,50)+ggtitle("Median Survival Over Time")
+
+#overall medians for no chemo
+medians_nochemo_fit <- survfit(Surv(time = nochemo$Survival.months, event = nochemo$event)~site+year,data=nochemo)
+medians_no_chemo <- as.data.frame(surv_median(medians_nochemo_fit))
+medians_no_chemo2 <- medians_no_chemo %>% mutate(site=str_extract(strata,"(?<==).+(?=,)"), year=as.numeric(str_extract(strata,"(?<=year=).+")))
+
+ggplot(medians_no_chemo2 )+geom_point(aes(x=year,y=median,color=site,group=site))+ylim(0,5)+ggtitle("Median Survival Over Time")
+
+
+
+#####Colorectal #####
+colorectal<- all_joined2%>%filter(site=="Colorectal")
+
+colorectal_fit<- survfit(Surv(time = colorectal$Survival.months, event = colorectal$event)~quantile2+year,data=colorectal)
+
+medians_colorectal <- as.data.frame(surv_median(colorectal_fit))
+medians_colorectal2 <- medians_colorectal %>% mutate(site=str_extract(strata,"(?<==).+(?=,)"), year=as.numeric(str_extract(strata,"(?<=year=).+")))%>%rename(Quantile=site)
+ggplot(medians_colorectal2)+geom_point(aes(x=year,y=median,color=Quantile,group=Quantile))+ylim(0,90)+ggtitle("Median CSS Over Time Colorectal")
+
+colorectal_upper_meds <- medians_colorectal2%>%select(Quantile,year,median)%>%filter(Quantile=="Top 25%",!is.na(median))
+fit_colorectal_upper_meds<- lm(median ~ year,colorectal_upper_meds)
+coefficients(fit_colorectal_upper_meds)
+confint(fit_colorectal_upper_meds)
+summary(fit_colorectal_upper_meds)
+
+colorectal_middle_meds <- medians_colorectal2%>%select(Quantile,year,median)%>%filter(Quantile=="Middle 50%",!is.na(median))
+fit_colorectal_middle_meds<- lm(median ~ year,colorectal_middle_meds)
+coefficients(fit_colorectal_middle_meds)
+confint(fit_colorectal_middle_meds)
+
+colorectal_lower_meds <- medians_colorectal2%>%select(Quantile,year,median)%>%filter(Quantile=="Lowest 25%",!is.na(median))
+fit_colorectal_lower_meds<- lm(median ~ year,colorectal_lower_meds)
+coefficients(fit_colorectal_lower_meds)
+confint(fit_colorectal_lower_meds)
+
+
+
+medians_colorectal2$Quantile<-factor(medians_colorectal2$Quantile,levels=c("Top 25%","Middle 50%","Lowest 25%"))
+
+ggplot(medians_colorectal2)+  geom_smooth(aes(x=year,y=median,group=Quantile),color=404040,method="lm",se = FALSE,alpha=.3)+
+                              
+                              labs(x="Year of Diagnosis",y="Median CSS (Months)",color="Survival Group")+
+                              theme_test()+ 
+                              theme(axis.text.x=element_text(size=rel(1.2)),axis.text.y=element_text(size=rel(1.2)))+ 
+                              
+                              #top
+                              geom_abline(slope=1.821815,intercept=30.166459, linetype="dashed",color = 404040)+
+                              geom_abline(slope=2.32405,intercept= 35.74783, linetype="dashed",color = 404040)+ 
+                              #middle
+                              geom_abline(slope=0.46594337,intercept=9.9632064 , linetype="dashed",color = 404040) +
+                              geom_abline(slope=0.5832875,intercept=11.6060243 , linetype="dashed",color = 404040) +
+                              #bottom
+                              geom_abline(slope=0.08928685,intercept= 2.37705690 , linetype="dashed",color = 404040) +
+                              geom_abline(slope=0.1466106,intercept=3.2126867, linetype="dashed",color = 404040) +
+  
+                              geom_point(aes(x=year,y=median,group=Quantile,color=Quantile),size=1.8)+
+                              #white bars
+                              geom_rect(xmin=-1.2,ymin=0,xmax=-.2,ymax=200,color="white",fill="white")+
+                              geom_rect(xmin=25.3,ymin=0,xmax=30,ymax=200,color="white",fill="white")+
+                              ylim(0,100)+
+                              ggtitle("Change in Metastatic Colorectal CSS 1990-2015 (With Chemo Receipt)")+
+                              scale_x_continuous(breaks=c(0,5,10,15,20,25),labels=c("1990","1995","2000","2005","2010","2015"))+
+                              scale_color_manual(values=c("Top 25%"="#1b9e77","Middle 50%"="#d95f02","Lowest 25%"="#7570b3"))
+                
+ggsave(width = 7,height=4,filename ="colorectal.png" ,plot=last_plot())
+
+
+#Lung
+lung<- all_joined2%>%filter(site=="Lung and Bronchus")
+
+lung_fit<- survfit(Surv(time = lung$Survival.months, event = lung$event)~quantile2+year,data=lung)
+
+medians_lung <- as.data.frame(surv_median(lung_fit))
+medians_lung2 <- medians_lung %>% mutate(site=str_extract(strata,"(?<==).+(?=,)"), year=as.numeric(str_extract(strata,"(?<=year=).+")))%>%rename(quartile=site)
+ggplot(medians_lung2)+geom_point(aes(x=year,y=median,color=quartile,group=quartile))+ylim(0,40)+ggtitle("Median CSS Over Time Lung")
+
+lung_upper_meds <- medians_lung2%>%select(quartile,year,median)%>%filter(quartile=="Top 25%",!is.na(median))
+fit_lung_upper_meds<- lm(median ~ year,lung_upper_meds)
+coefficients(fit_lung_upper_meds)
+confint(fit_lung_upper_meds)
+summary(fit_lung_upper_meds)
+
+lung_middle_meds <- medians_lung2%>%select(quartile,year,median)%>%filter(quartile=="Middle 50%",!is.na(median))
+fit_lung_middle_meds<- lm(median ~ year,lung_middle_meds)
+coefficients(fit_lung_middle_meds)
+confint(fit_lung_middle_meds)
+
+lung_lower_meds <- medians_lung2%>%select(quartile,year,median)%>%filter(quartile=="Lowest 25%",!is.na(median))
+fit_lung_lower_meds<- lm(median ~ year,lung_lower_meds)
+coefficients(fit_lung_lower_meds)
+confint(fit_lung_lower_meds)
+
+medians_lung2$quartile<-factor(medians_lung2$quartile,levels=c("Top 25%","Middle 50%","Lowest 25%"))
+
+
+ggplot(medians_lung2)+        geom_smooth(aes(x=year,y=median,group=quartile),color=404040,method="lm",se = FALSE,alpha=.3)+
+                              
+                              labs(x="Year of Diagnosis",y="Median CSS (Months)",color="Survival Group")+
+                              theme_test()+ 
+                              theme(axis.text.x=element_text(size=rel(1.2)),axis.text.y=element_text(size=rel(1.2)))+ 
+                              
+                              #top
+                              geom_abline(slope=0.6791702,intercept=13.9259558, linetype="dashed",color = 404040)+
+                              geom_abline(slope=0.8173515,intercept= 15.7807109, linetype="dashed",color = 404040)+ 
+                              #middle
+                              geom_abline(slope=0.1080711,intercept=5.8268792, linetype="dashed",color = 404040) +
+                              geom_abline(slope=0.151758,intercept=6.463719, linetype="dashed",color = 404040) +
+                              #bottom
+                              geom_abline(slope=0.02131515,intercept= 1.14926811, linetype="dashed",color = 404040) +
+                              geom_abline(slope=0.05594981,intercept=1.65415069, linetype="dashed",color = 404040) +
+  
+                              geom_point(aes(x=year,y=median,group=quartile,color=quartile),size=1.8)+
+                              #white bars
+                              geom_rect(xmin=-1.2,ymin=0,xmax=-.2,ymax=200,color="white",fill="white")+
+                              geom_rect(xmin=25.3,ymin=0,xmax=30,ymax=200,color="white",fill="white")+
+                              ylim(0,40)+
+                              ggtitle("Change in Metastatic Lung CSS 1990-2015 (With Chemo Receipt)")+
+                              scale_x_continuous(breaks=c(0,5,10,15,20,25),labels=c("1990","1995","2000","2005","2010","2015"))+
+                              scale_color_manual(values=c("Top 25%"="#1b9e77","Middle 50%"="#d95f02","Lowest 25%"="#7570b3"))
+
+ggsave(width = 7,height=4,filename ="lung.png" ,plot=last_plot())
+
+
+
+
+#Pan
+pan<- all_joined2%>%filter(site=="Pancreas")
+pan_fit<- survfit(Surv(time = pan$Survival.months, event = pan$event)~quantile2+year,data=pan)
+medians_pan <- as.data.frame(surv_median(pan_fit))
+medians_pan2 <- medians_pan %>% mutate(site=str_extract(strata,"(?<==).+(?=,)"), year=as.numeric(str_extract(strata,"(?<=year=).+")))%>%rename(quartile=site)
+ggplot(medians_pan2)+geom_point(aes(x=year,y=median,color=quartile,group=quartile))+ylim(0,30)+ggtitle("Median CSS Over Time Pancrease")
+
+pan_upper_meds <- medians_pan2%>%select(quartile,year,median)%>%filter(quartile=="Top 25%",!is.na(median))
+fit_pan_upper_meds<- lm(median ~ year,pan_upper_meds)
+coefficients(fit_pan_upper_meds)
+confint(fit_pan_upper_meds)
+summary(fit_pan_upper_meds)
+
+pan_middle_meds <- medians_pan2%>%select(quartile,year,median)%>%filter(quartile=="Middle 50%",!is.na(median))
+fit_pan_middle_meds<- lm(median ~ year,pan_middle_meds)
+coefficients(fit_pan_middle_meds)
+confint(fit_pan_middle_meds)
+
+pan_lower_meds <- medians_pan2%>%select(quartile,year,median)%>%filter(quartile=="Lowest 25%",!is.na(median))
+fit_pan_lower_meds<- lm(median ~ year,pan_lower_meds)
+coefficients(fit_pan_lower_meds)
+confint(fit_pan_lower_meds)
+
+medians_pan2$quartile<-factor(medians_pan2$quartile,levels=c("Top 25%","Middle 50%","Lowest 25%"))
+
+ggplot(medians_pan2)+         geom_smooth(aes(x=year,y=median,group=quartile),color=404040,method="lm",se = FALSE,alpha=.3)+
+                              
+                              labs(x="Year of Diagnosis",y="Median CSS (Months)",color="Survival Group")+
+                              theme_test()+ 
+                              theme(axis.text.x=element_text(size=rel(1.2)),axis.text.y=element_text(size=rel(1.2)))+ 
+                              
+                              #top
+                              geom_abline(slope=0.3481896 ,intercept=10.2968664, linetype="dashed",color = 404040)+
+                              geom_abline(slope=0.4962549,intercept= 12.4552703, linetype="dashed",color = 404040)+ 
+                              #middle
+                              geom_abline(slope=0.1249049,intercept=3.209146 , linetype="dashed",color = 404040) +
+                              geom_abline(slope=0.1759498,intercept=3.9532464, linetype="dashed",color = 404040) +
+                              #bottom
+                              geom_abline(slope=0.02953785,intercept= 0.46860452, linetype="dashed",color = 404040) +
+                              geom_abline(slope=0.06140232,intercept=0.93310488, linetype="dashed",color = 404040) +
+  
+                              geom_point(aes(x=year,y=median,group=quartile,color=quartile),size=1.8)+
+                              #white bars
+                              geom_rect(xmin=-1.2,ymin=0,xmax=-.2,ymax=200,color="white",fill="white")+
+                              geom_rect(xmin=25.3,ymin=0,xmax=30,ymax=200,color="white",fill="white")+
+                              ylim(0,30)+
+                              ggtitle("Change in Metastatic Pancreatic CSS 1990-2015 (With Chemo Receipt)")+
+                              scale_x_continuous(breaks=c(0,5,10,15,20,25),labels=c("1990","1995","2000","2005","2010","2015"))+
+                              scale_color_manual(values=c("Top 25%"="#1b9e77","Middle 50%"="#d95f02","Lowest 25%"="#7570b3"))
+                             # scale_color_hue("Top 25%"="red","Middle 50%"="yellow","Lowest 25%"="blue")
+
+ggsave(width = 7,height=4,filename ="pan.png" ,plot=last_plot())
+
+###getting demographics from colorectal, lung and pan
+addmargins(table(colorectal$Race.recode..W..B..AI..API.,colorectal$quantile2))
+addmargins(table(colorectal$Sex,colorectal$quantile2))
+
+c<-colorectal %>% filter(quantile2=="Top 25%")
+c2<-colorectal %>% filter(quantile2=="Middle 50%")
+c3<-colorectal %>% filter(quantile2=="Lowest 25%")
+summary(c3$Age.at.diagnosis)
+
+
+v1c<-c$Age.at.diagnosis
+v3c<-c3$Age.at.diagnosis
+wilcox.test(v1c,v3c,paired=FALSE)
+
+summary()
+
+
+addmargins(table(lung$Race.recode..W..B..AI..API.,lung$quantile2))
+addmargins(table(lung$Sex,lung$quantile2))
+
+l<-lung %>% filter(quantile2=="Top 25%")
+l2<-lung %>% filter(quantile2=="Middle 50%")
+l3<-lung %>% filter(quantile2=="Lowest 25%")
+summary(l$Age.at.diagnosis)
+summary(l2$Age.at.diagnosis)
+summary(l3$Age.at.diagnosis)
+
+
+
+addmargins(table(pan$Race.recode..W..B..AI..API.,pan$quantile2))
+table(pan$Sex,pan$quantile2)
+
+p<-pan %>% filter(quantile2=="Top 25%")
+p2<-pan %>% filter(quantile2=="Middle 50%")
+p3<-pan %>% filter(quantile2=="Lowest 25%")
+summary(p$Age.at.diagnosis)
+summary(p2$Age.at.diagnosis)
+summary(p3$Age.at.diagnosis)
+```
+
+
+
+
+
+### Assesing cox model assumptions ###
+```{r}
+
+coxph_all2 <- coxme::coxme(surv_all ~ year.x*newntile +(1|site.x), data = all_joined)
+summary(coxph_all2)
+
+coxph_all3<- coxph(surv_all ~ year.x*Sex + year.x*Age.at.diagnosis + year.x*site.y + year.x*Race.recode..W..B..AI..API.,, 
+                   data = all_joined)
+
+coxph_all4<- coxph(surv_all ~year.x*newntile +site.y, 
+                   data = all_joined)
+
+summary(coxph_all3)
+
+#all_joined contains all values
+# this creates surv object w/ everyone surv_all <- Surv(time = all_joined$Survival.months, event = all_joined$event)
+
+#test crc
+test_crc<-all_joined%>%filter(site.x=="Colorectal")
+surv_test_crc <- Surv(time = test_crc$Survival.months, event = test_crc$event)
+coxph_test_crc <- coxph(surv_test_crc ~ year.x*newntile, 
+                   data = test_crc)
+
+summary(all_joined2$Age.at.diagnosis)
+
+test_crc2<- cox.zph(coxph_test_crc)
+test_crc2
+
+ggcoxzph(test_crc2)
+
+ggcoxdiagnostics(coxph_test_crc, type = "dfbeta",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+
+
+ggcoxdiagnostics(coxph_test_crc, type = "deviance",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+
+
+
+
+ggcoxfunctional(Surv(time = test_crc$Survival.months, event = test_crc$event) ~ newntile + log(newntile) + sqrt(newntile), data = test_crc)
+
+```
+
+
+
+
+### Making KP curves that show changes over time ###
+```{r}
+
+### OLD CODE ###
+#data sets
+all_1990= all_joined[all_joined$Year.of.diagnosis==1990,]
+all_2000= all_joined[all_joined$Year.of.diagnosis==2000,]
+all_2010= all_joined[all_joined$Year.of.diagnosis==2010,]
+
+all_1990 <- all_1990%>%filter(newntile<.25 | newntile>.75)
+
+
+#surv objects
+surv_1990 <- Surv(time = all_1990$Survival.months, event = all_1990$event)
+surv_2000 <- Surv(time = all_2000$Survival.months, event = all_2000$event)
+surv_2010 <- Surv(time = all_2010$Survival.months, event = all_2010$event)
+
+#fit km curves
+fit_1990<- survfit(surv_1990~Quartile1,data=all_1990)
+fit_2000<- survfit(surv_2000~Quartile1,data=all_2000)
+fit_2010<- survfit(surv_2010~Quartile1,data=all_2010)
+
+#Graph
+ggsurvplot(fit_1990,data=all_1990)+ ggtitle("1990")
+ggsurvplot(fit_2000,data=all_2000)+ ggtitle("2000")
+ggsurvplot(fit_2010,data=all_2010)+ ggtitle("2010")
+
+
+
+
+### NEW CODE ###
+
+all_joined2<-all_joined%>%mutate(quantile=ifelse(newntile<0.25,"Lower Quarter",ifelse(newntile>0.75,"Top Quarter","Middle 50")))
+
+lowerq<-all_joined2%>%filter(quantile=="Lower Quarter")%>%mutate(yeargp=ifelse(year.x<9,"1990_1998",ifelse(year.x>17,"2008_2015","1999_2007")))
+surv_lowerq<- Surv(time = lowerq$Survival.months, event = lowerq$event)
+fit_lowerq<- survfit(surv_lowerq~yeargp,data=lowerq)
+ggsurvplot(fit_lowerq,data=lowerq)+ ggtitle("Lower q")
+
+
+
+
+
+middle<-all_joined2%>%filter(quantile=="Middle 50")%>%mutate(yeargp=ifelse(year.x<9,"1990_1998",ifelse(year.x>17,"2008_2015","1999_2007")))
+surv_middle<- Surv(time = middle$Survival.months, event = middle$event)
+fit_middle<- survfit(surv_middle~yeargp,data=middle)
+ggsurvplot(fit_middle,data=middle)+ ggtitle("middle 50")
+
+
+
+
+upperq<-all_joined2%>%filter(quantile=="Top Quarter")%>%mutate(yeargp=ifelse(year.x<9,"1990_1998",ifelse(year.x>17,"2008_2015","1999_2007")))
+surv_upperq<- Surv(time = upperq$Survival.months, event = upperq$event)
+fit_upperq<- survfit(surv_upperq~yeargp,data=upperq)
+ggsurvplot(fit_upperq,data=upperq)+ ggtitle("upperq")
+
+
+## Kap Meir Plots by cancer site ##
+
+#Lower 
+lowerq_lungdf<-lowerq%>%filter(site.y=="Lung and Bronchus")
+lowerq_breastdf<-lowerq%>%filter(site.y=="Breast")
+lowerq_colondf<-lowerq%>%filter(site.y=="Colorectal")
+lowerq_pandf<-lowerq%>%filter(site.y=="Pancreas")
+
+surv_lowerq_lung<- Surv(time = lowerq_lungdf$Survival.months, event = lowerq_lungdf$event)
+surv_lowerq_breast<- Surv(time = lowerq_breastdf$Survival.months, event = lowerq_breastdf$event)
+surv_lowerq_colon<- Surv(time = lowerq_colondf$Survival.months, event = lowerq_colondf$event)
+surv_lowerq_pan<- Surv(time = lowerq_pandf$Survival.months, event = lowerq_pandf$event)
+
+
+fit_lowerq_lung<- survfit(surv_lowerq_lung~yeargp,data=lowerq_lungdf)
+fit_lowerq_breast<- survfit(surv_lowerq_breast~yeargp,data=lowerq_breastdf)
+fit_lowerq_colon<- survfit(surv_lowerq_colon~yeargp,data=lowerq_colondf)
+fit_lowerq_pan<- survfit(surv_lowerq_pan~yeargp,data=lowerq_pandf)
+
+ggsurvplot(fit_lowerq_lung,data=lowerq_lungdf)+ ggtitle("Lower q lung") 
+ggsurvplot(fit_lowerq_breast,data=lowerq_breastdf)+ ggtitle("Lower q breast")
+ggsurvplot(fit_lowerq_colon,data=lowerq_colondf)+ ggtitle("Lower q colon")
+ggsurvplot(fit_lowerq_pan,data=lowerq_pandf)+ ggtitle("Lower q pan")
+
+
+#upper
+upperq_lungdf<-upperq%>%filter(site.y=="Lung and Bronchus")
+upperq_breastdf<-upperq%>%filter(site.y=="Breast")
+upperq_colondf<-upperq%>%filter(site.y=="Colorectal")
+upperq_pandf<-upperq%>%filter(site.y=="Pancreas")
+
+surv_upperq_lung<- Surv(time = upperq_lungdf$Survival.months, event = upperq_lungdf$event)
+surv_upperq_breast<- Surv(time = upperq_breastdf$Survival.months, event = upperq_breastdf$event)
+surv_upperq_colon<- Surv(time = upperq_colondf$Survival.months, event = upperq_colondf$event)
+surv_upperq_pan<- Surv(time = upperq_pandf$Survival.months, event = upperq_pandf$event)
+
+
+fit_upperq_lung<- survfit(surv_upperq_lung~yeargp,data=upperq_lungdf)
+fit_upperq_breast<- survfit(surv_upperq_breast~yeargp,data=upperq_breastdf)
+fit_upperq_colon<- survfit(surv_upperq_colon~yeargp,data=upperq_colondf)
+fit_upperq_pan<- survfit(surv_upperq_pan~yeargp,data=upperq_pandf)
+
+ggsurvplot(fit_upperq_lung,data=upperq_lungdf,xlim=c(0,100))+ ggtitle("upper q lung")
+ggsurvplot(fit_upperq_breast,data=upperq_breastdf)+ ggtitle("upper q breast")
+ggsurvplot(fit_upperq_colon,data=upperq_colondf)+ ggtitle("upper q colon")
+ggsurvplot(fit_upperq_pan,data=upperq_pandf)+ ggtitle("upper q pan")
+
+```
+
+
+```{r}
+
+plotbootse <- function(fit,samp_distn,meds) {
+#New plot with bootstrapped SE
+      
+      #Getting estimated Co-efficeints
+      mat <- cbind(coef(fit))
+      
+      #making table of mx+b
+      lines <- c((mat[1]),(mat[5]))
+      lines <- rbind(lines,c((mat[1]+mat[2]),(mat[5]+mat[6])))
+      lines <- rbind(lines,c((mat[1]+mat[3]),(mat[5]+mat[7])))
+      lines <- rbind(lines,c((mat[1]+mat[4]),(mat[5]+mat[8])))
+      row.names(lines) <- c("quartile1","quartile2","quartile3","quartile4")
+      lines <-  as.data.frame(lines)
+      names(lines)[1] <- "yIntercept"
+      names(lines)[2] <- "mSlope"
+      
+      #Boot data
+      bootci <- samp_distn%>%t%>%as.data.frame%>%summarise_all(sd)
+      bootci
+      #Entering boot data into 
+      lines$lowery <- 0
+      lines$lowerm <- 0
+      lines$uppery <- 0
+      lines$upperm <- 0
+      
+      #q1 y lower & upper
+      lines[1,3] <- (lines[1,1] - bootci[1,1])
+      lines[1,5] <- (lines[1,1] + bootci[1,1])
+      
+      #q2 y lower & upper
+      lines[2,3] <- (lines[2,1] - (bootci[1,1] + bootci[1,2]))
+      lines[2,5] <- (lines[2,1] + (bootci[1,1] + bootci[1,2]))
+      
+      #q3 y lower & upper
+      lines[3,3] <- (lines[3,1] - (bootci[1,1] + bootci[1,3]))
+      lines[3,5] <- (lines[3,1] + (bootci[1,1] + bootci[1,3]))
+      
+      #q4 y lower & upper
+      lines[4,3] <- (lines[4,1] - (bootci[1,1] + bootci[1,4]))
+      lines[4,5] <- (lines[4,1] + (bootci[1,1] + bootci[1,4]))
+      
+      #q1 m lower & upper
+      lines[1,4] <- (lines[1,2] - bootci[1,5])
+      lines[1,6] <- (lines[1,2] + bootci[1,5])
+     
+      #q2 m lower & upper
+      lines[2,4] <- (lines[2,2] - (bootci[1,5] + bootci[1,6]))
+      lines[2,6] <- (lines[2,2] + (bootci[1,5] + bootci[1,6]))
+      
+      #q3 m lower & upper
+      lines[3,4] <- (lines[3,2] - (bootci[1,5] + bootci[1,7]))
+      lines[3,6] <- (lines[3,2] + (bootci[1,5] + bootci[1,7]))
+       
+      #q4 m lower & upper
+      lines[4,4] <- (lines[4,2] - (bootci[1,5] + bootci[1,8]))
+      lines[4,6] <- (lines[4,2] + (bootci[1,5] + bootci[1,8]))
+     
+    
+      ggplot() +  geom_point(data=meds, aes(x=Year.of.diagnosis,y=meds,group=quartile,color=quartile),size=1.2) + geom_smooth(data =    meds,aes(x=Year.of.diagnosis,y=meds,group=quartile,color=quartile),method="lm",se = FALSE)  + labs(x="Year of Diagnosis",y="Median Overall Survival (Months)",color="Quartile") +
+        theme_test() +
+        theme(axis.text.x=element_text(size=rel(1.5)),axis.text.y=element_text(size=rel(1.5)) )+
+      
+        #q4 min & max
+        geom_abline(data = lines, aes(slope=lines[4,4],intercept= (lines[4,3]-lines[4,4]*1990)), linetype="dashed",color = 404040) +
+        geom_abline(data = lines, aes(slope=lines[4,6],intercept= (lines[4,5]-lines[4,6]*1990)), linetype="dashed",color = 404040) +
+    
+        #q3
+        geom_abline(data = lines, aes(slope=lines[3,4],intercept= (lines[3,3]-lines[3,4]*1990)), linetype="dashed",color = 404040) +
+        geom_abline(data = lines, aes(slope=lines[3,6],intercept= (lines[3,5]-lines[3,6]*1990)), linetype="dashed",color = 404040) +
+      
+        #q2
+        geom_abline(data = lines, aes(slope=lines[2,4],intercept= (lines[2,3]-lines[2,4]*1990)), linetype="dashed",color = 404040) +
+        geom_abline(data = lines, aes(slope=lines[2,6],intercept= (lines[2,5]-lines[2,6]*1990)), linetype="dashed",color = 404040) +
+    
+      
+        #q1
+        geom_abline(data = lines, aes(slope=lines[1,4],intercept= (lines[1,3]-lines[1,4]*1990)), linetype="dashed",color = 404040) +
+        geom_abline(data = lines, aes(slope=lines[1,6],intercept= (lines[1,5]-lines[1,6]*1990)), linetype="dashed",color = 404040) +
+        #WILL NEED TO CHANGE THIS FOR EACH GRAPH
+        geom_rect(data = lines, xmin=1980,ymin=0,xmax=1989.8,ymax=200,color="white",fill="white")+
+        geom_rect(data = lines, xmin=2011.2,ymin=0,xmax=2020,ymax=200,color="white",fill="white")
+      
+}
+
+
+
+
+
+```
+
+
+
